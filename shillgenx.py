@@ -1,13 +1,27 @@
 from telebot.async_telebot import AsyncTeleBot
 from telebot import types
 from dotenv import load_dotenv
+from pymongo import MongoClient
 import os
 import asyncio
+
+from db.schemas import Project, ShillgenXTarget
 
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 bot = AsyncTeleBot(TELEGRAM_BOT_TOKEN)
+
+MONGO_USERNAME = os.getenv('MONGO_USERNAME')
+MONGO_PASSWORD = os.getenv('MONGO_PASSWORD')
+MONGO_HOST = os.getenv('MONGO_HOST')
+MONGO_PORT = os.getenv('MONGO_PORT')
+MONGO_DB = os.getenv('MONGO_DB')
+conn_str = f"mongodb://{MONGO_USERNAME}:{MONGO_PASSWORD}@{MONGO_HOST}:{MONGO_PORT}/{MONGO_DB}"
+client = MongoClient(conn_str)
+db = client[MONGO_DB]
+
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
 # Dictionary to store the state and data for each chat
 chat_states = {}
@@ -18,11 +32,28 @@ AWAITING_X_TARGET_LINK, AWAITING_LOCK_DURATION= range(6, 8)
 AWAITING_ITEM_TO_EDIT, AWAITING_NEW_VALUE = range(8, 10)
 GENERATING_POST = range(10, 10)
 
+#################################################################
+#                                                               #
+#                   SHILLGENX DB OPERATIONS                     #
+#                                                               #
+#################################################################
+def db_add_project(project: Project):
+    collection = db.users
+    result = collection.insert_one({"name": "Alice", "age": 30})
+    print(result)
+
+def db_get_project(telegram_chat_id: str):
+    collection = db.users
+    user = collection.find_one({"name": "Alice"})
+    print(user)
+
 def is_permission_granted():
     return True
 
 @bot.message_handler(commands=['shillgenx'])
 async def handle_shillgenx(message):
+    db_add_project(project=None)
+    db_get_project(telegram_chat_id=None)
     chat_id = message.chat.id
     chat_states[chat_id] = {'state': AWAITING_PROJECT_NAME}
     await bot.send_message(chat_id, "What is the name of your project?")
