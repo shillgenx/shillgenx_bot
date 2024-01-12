@@ -1,5 +1,10 @@
+from enum import Enum
 from dataclasses import dataclass
 from typing import List, Dict
+
+class Schemas(Enum):
+    projects = 1
+    targets = 2
 
 @dataclass
 class Project:
@@ -18,7 +23,7 @@ class Project:
 class ShillgenXTarget:
     _id: str
     project_id: str
-    private_chat_id: str
+    group_chat_id: str
     x_target_link: str
     lock_duration: int
 
