@@ -166,12 +166,13 @@ async def handle_shillgenx_setup(message):
         return
 
     if db_get_project(chat_id):
-        await bot.send_message(chat_id, "A ShillgenX account is already setup in this chat.")
+        await bot.send_message(chat_id, "A ShillgenX account is already setup in this chat. Use /sgx_delete to start over.")
         return
 
     chat_states[chat_id] = {
         'state': AWAITING_PROJECT_NAME,
-        'current_user': user_id
+        'current_user': user_id,
+        'project': Project()
         }
     await bot.send_message(chat_id, "What is the name of your project?")
 
@@ -193,58 +194,79 @@ async def process_project_name(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
 
-    if not chat_states[chat_id]['current_user'] == user_id:
+    if chat_states[chat_id]['current_user'] and not chat_states[chat_id]['current_user'] == user_id:
         return
 
-    chat_states[chat_id]['project_name'] = message.text
-    chat_states[chat_id]['state'] = AWAITING_PROJECT_DESCRIPTION
-    await bot.send_message(chat_id, "Tell me about your project! You can include details about the following (the more I know, the better):\nProduct\nTechnology\nSecurity\nNarrative\nRoadmap\nUse Case\nCommunity\n")
+    try:
+        chat_states[chat_id]['project'].set_name(message.text)
+        chat_states[chat_id]['project_name'] = message.text
+        chat_states[chat_id]['state'] = AWAITING_PROJECT_DESCRIPTION
+        await bot.send_message(chat_id, "Tell me about your project! You can include details about the following (the more I know, the better):\nProduct\nTechnology\nSecurity\nNarrative\nRoadmap\nUse Case\nCommunity\n")
+    except ValueError as e:
+        await bot.send_message(chat_id, f"{e}")
+    except Exception as e:
+        print(f"An error occured: {e}")
 
 @bot.message_handler(func=lambda message: chat_states.get(message.chat.id, {}).get('state') == AWAITING_PROJECT_DESCRIPTION)
-async def process_x_handle(message):
+async def process_project_description(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
 
-    if not chat_states[chat_id]['current_user'] == user_id:
+    if chat_states[chat_id]['current_user'] and not chat_states[chat_id]['current_user'] == user_id:
         return
 
-    chat_states[chat_id]['project_description'] = message.text
-    chat_states[chat_id]['state'] = AWAITING_X_HANDLE
-    await bot.send_message(chat_id, "What is the X Handle of your project? (@example)")
+    try:
+        chat_states[chat_id]['project'].set_description(message.text)
+        chat_states[chat_id]['project_description'] = message.text
+        chat_states[chat_id]['state'] = AWAITING_X_HANDLE
+        await bot.send_message(chat_id, "What is the X Handle of your project?\nExample:\n@example")
+    except ValueError as e:
+        await bot.send_message(chat_id, f"{e}")
+    except Exception as e:
+        print(f"An error occured: {e}")
 
 @bot.message_handler(func=lambda message: chat_states.get(message.chat.id, {}).get('state') == AWAITING_X_HANDLE)
 async def process_x_handle(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
 
-    if not chat_states[chat_id]['current_user'] == user_id:
+    if chat_states[chat_id]['current_user'] and not chat_states[chat_id]['current_user'] == user_id:
         return
-
-    chat_states[chat_id]['x_handle'] = message.text
-    chat_states[chat_id]['state'] = AWAITING_WEBSITE
-    await bot.send_message(chat_id, "What is your project's website? (example.ai)")
+    try:
+        chat_states[chat_id]['project'].set_x_handle(message.text)
+        chat_states[chat_id]['x_handle'] = message.text
+        chat_states[chat_id]['state'] = AWAITING_WEBSITE
+        await bot.send_message(chat_id, "What is your project's website?\nExample:\nwww.example.ai")
+    except ValueError as e:
+        await bot.send_message(chat_id, f"{e}")
+    except Exception as e:
+        print(f"An error occured: {e}")
 
 @bot.message_handler(func=lambda message: chat_states.get(message.chat.id, {}).get('state') == AWAITING_WEBSITE)
 async def process_website(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
 
-    if not chat_states[chat_id]['current_user'] == user_id:
+    if chat_states[chat_id]['current_user'] and not chat_states[chat_id]['current_user'] == user_id:
         return
 
-    chat_states[chat_id]['website'] = message.text
-    chat_states[chat_id]['state'] = AWAITING_TAGS
-    await bot.send_message(chat_id, "What are some tags for your project? ($EXAMPLE, #EXAMPLE)")
+    try:
+        chat_states[chat_id]['project'].set_website(message.text)
+        chat_states[chat_id]['website'] = message.text
+        chat_states[chat_id]['state'] = AWAITING_TAGS
+        await bot.send_message(chat_id, "What are some tags for your project?\nExample:\n$EXAMPLE, #EXAMPLE")
+    except ValueError as e:
+        await bot.send_message(chat_id, f"{e}")
+    except Exception as e:
+        print(f"An error occured: {e}")
 
 @bot.message_handler(func=lambda message: chat_states.get(message.chat.id, {}).get('state') == AWAITING_TAGS)
 async def process_tags(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
 
-    if not chat_states[chat_id]['current_user'] == user_id:
+    if chat_states[chat_id]['current_user'] and not chat_states[chat_id]['current_user'] == user_id:
         return
-
-    chat_states[chat_id]['tags'] = message.text
 
     # Get the telegram group invite link
     try:
@@ -252,23 +274,22 @@ async def process_tags(message):
     except Exception as e:
         print(f"An error occured: {e}")
 
-    project = {
-        '_id': '',
-        'group_chat_id': chat_id,
-        'name': chat_states[chat_id]['project_name'],
-        'description': chat_states[chat_id]['project_description'],
-        'x_handle': chat_states[chat_id]['x_handle'],
-        'telegram': invite_link,
-        'website': chat_states[chat_id]['website'],
-        'tags': chat_states[chat_id]['tags'],
-        'topics': {'topic1': 'detail1', 'topic2': 'detail2'}
-    }
+    try:
+        chat_states[chat_id]['project'].set_tags_string(message.text)
+        chat_states[chat_id]['tags'] = message.text
 
-    project = Project(**project)
-    created_project = db_add_project(project)
+        chat_states[chat_id]['project'].set_group_chat_id(chat_id)
+        chat_states[chat_id]['project'].set_telegram(invite_link)
+        created_project = db_add_project(chat_states[chat_id]['project'])
 
-    del chat_states[chat_id]
-    await bot.send_message(chat_id, "Thank you! Now use /shillx to start raiding!")
+        print(chat_states[chat_id]['project'])
+
+        del chat_states[chat_id]
+        await bot.send_message(chat_id, "Thank you! Now use /shillx to start raiding!")
+    except ValueError as e:
+        await bot.send_message(chat_id, f"{e}")
+    except Exception as e:
+        print(f"An error occured: {e}")
 
 @bot.message_handler(commands=['shillx'])
 async def process_shillx(message):
