@@ -5,7 +5,9 @@ from pymongo import MongoClient
 from bson.objectid import ObjectId
 from dataclasses import asdict
 from typing import List, Dict
+from openai import OpenAI
 import os
+import json
 import asyncio
 
 from db.schemas import Project, ShillgenXTarget, Schemas
@@ -25,6 +27,7 @@ client = MongoClient(conn_str)
 db = client[MONGO_DB]
 
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+ai_client = OpenAI()
 
 # Dictionary to store the state and data for each chat
 chat_states = {}
@@ -139,12 +142,75 @@ async def is_user_admin(chat_id, user_id):
 def is_permission_granted():
     return True
 
+async def tg_lock_chat(chat_id):
+    try:
+        permissions = types.ChatPermissions(can_send_messages=False)
+        await bot.set_chat_permissions(chat_id, permissions)
+    except Exception as e:
+        print(f"ShillgenX must be an admin")
+
+async def tg_unlock_chat(chat_id):
+    try:
+        permissions = types.ChatPermissions(can_send_messages=True)
+        await bot.set_chat_permissions(chat_id, permissions)
+    except Exception as e:
+        print(f"ShillgenX must be an admin")
+    
+
+async def tg_lock_chat_for(chat_id, duration_min):
+    try:
+        await tg_lock_chat(chat_id)
+
+        if duration_min > 0:
+            await asyncio.sleep(duration_min * 60)
+            await tg_unlock_chat(chat_id)
+
+    except Exception as e:
+        print(f"ShillgenX must be an admin")
+
+#################################################################
+#                                                               #
+#                      OPENAI FUNCTIONS                         #
+#                                                               #
+#################################################################
+async def ai_send_prompt(prompt: str):
+    chat_completion = ai_client.chat.completions.create(
+        model="gpt-3.5-turbo-1106",
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"},
+        max_tokens=1000
+    )
+    return chat_completion.choices[0].message.content
+
+async def ai_prefill_topics(project: Project, topics: Dict[str, str]):
+    """ Generate initial/sample descriptions of the topics
+    """
+    prompt = "Act as the project owner and based on the following project description:\"\n{}\"\nWrite descriptions (20 to 25 words each) for the following JSON keys: {}".format(project.description, ", ".join(topics.keys()))
+    response = await ai_send_prompt(prompt)
+    # TODO: Verify if all required fields are present. If not, do it again.
+    topics_json = json.loads(response)
+    return topics_json
+
+async def ai_generate_post(project: Project, mood: str, topic: str):
+    """ Generate the post
+    """
+    prompt = f"Write a {gen_details.mood} shill tweet about the project's {topic} in JSON format with one key 'post'. Use the following info:\
+Project Name: {project.name}\
+Project Description: {project.description}\
+Tags: {project.tags}\
+Tweet Topic: {topic}\
+Topic Details: {project.topics[topic]}"
+    # TODO: Verify if all required fields are present. If not, do it again.
+    response = await ai_send_prompt(prompt)
+    return response
+
 #################################################################
 #                                                               #
 #                      BOT FLOW FUNCTIONS                       #
 #                                                               #
 #################################################################
 
+########################## General ##############################
 @bot.message_handler(commands=['cancel'])
 async def handle_cancel(message):
     user_id = message.from_user.id
@@ -156,13 +222,14 @@ async def handle_cancel(message):
     del chat_states[chat_id]
     await bot.send_message(chat_id, "Operation canceled.")
 
+##################### Account Creation ##########################
 @bot.message_handler(commands=['sgx_setup'])
 async def handle_shillgenx_setup(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
 
     if not await is_user_admin(chat_id, user_id):
-        await bot.reply_to(message, "You must be an admin for this operation.")
+        # await bot.reply_to(message, "You must be an admin for this operation.")
         return
 
     if db_get_project(chat_id):
@@ -182,7 +249,8 @@ async def handle_shillgenx_delete(message):
     chat_id = message.chat.id
 
     if not await is_user_admin(chat_id, user_id):
-        await bot.reply_to(message, "You must be an admin for this operation.")
+        # await bot.reply_to(message, "You must be an admin for this operation.")
+        return
 
     if db_delete_project(chat_id):
         await bot.send_message(chat_id, "ShillgenX account successfully deleted.")
@@ -276,93 +344,93 @@ async def process_tags(message):
 
     try:
         chat_states[chat_id]['project'].set_tags_string(message.text)
-        chat_states[chat_id]['tags'] = message.text
-
         chat_states[chat_id]['project'].set_group_chat_id(chat_id)
         chat_states[chat_id]['project'].set_telegram(invite_link)
+        chat_states[chat_id]['tags'] = message.text
+        await bot.send_message(chat_id, "Creating your account. Please wait...")
+
+        initial_topics = await ai_prefill_topics(chat_states[chat_id]['project'], chat_states[chat_id]['project'].topics)
+        chat_states[chat_id]['project'].set_topics(initial_topics)
+
         created_project = db_add_project(chat_states[chat_id]['project'])
 
-        print(chat_states[chat_id]['project'])
-
         del chat_states[chat_id]
-        await bot.send_message(chat_id, "Thank you! Now use /shillx to start raiding!")
+        await bot.send_message(chat_id, "Thank you! Your account has been created. Now use /shillx to start raiding!")
     except ValueError as e:
         await bot.send_message(chat_id, f"{e}")
     except Exception as e:
         print(f"An error occured: {e}")
 
+################### Shill Target Generation ###################
 @bot.message_handler(commands=['shillx'])
 async def process_shillx(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
-    if is_permission_granted():
-        try:
-            # Restricting all members from sending messages
-            permissions = types.ChatPermissions(can_send_messages=False)
-            await bot.set_chat_permissions(chat_id, permissions)
-            print("Chat locked")
-        except Exception as e:
-            print("An error occurred:", e)
 
-    chat_states[chat_id] = {
-        'state': AWAITING_X_TARGET_LINK,
-        'current_user': user_id}
-    await bot.send_message(chat_id, "Paste the link to raid target!")
+    if not await is_user_admin(chat_id, user_id):
+        # await bot.reply_to(message, "You must be an admin for this operation.")
+        return
+
+    try:
+        await tg_lock_chat_for(chat_id, 0)
+        print("Shill Target creation started. Chat locked.")
+
+        chat_states[chat_id] = {
+            'state': AWAITING_X_TARGET_LINK,
+            'current_user': user_id,
+            'target': ShillgenXTarget()
+            }
+        await bot.send_message(chat_id, "Paste the X link to the raid target!")
+    except telebot.apihelper.ApiException as api_exception:
+        print(f"Telegram API error occurred: {api_exception}")
+    except telebot.apihelper.ApiTelegramException as api_telegram_exception:
+        print(f"Telegram specific API error occurred: {api_telegram_exception}")
+    except Exception as e:
+        print("An error occurred:", e)
 
 @bot.message_handler(func=lambda message: chat_states.get(message.chat.id, {}).get('state') == AWAITING_X_TARGET_LINK)
 async def process_x_target_link(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
 
-    if not chat_states[chat_id]['current_user'] == user_id:
+    if chat_states[chat_id]['current_user'] and not chat_states[chat_id]['current_user'] == user_id:
         return
 
-    chat_states[chat_id]['x_target_link_id'] = "mongodbid"
-    chat_states[chat_id]['x_target_link'] = message.text
-    chat_states[chat_id]['state'] = AWAITING_LOCK_DURATION
-    if is_permission_granted():
+    try:
+        chat_states[chat_id]['target'].set_x_target_link(message.text)
+        chat_states[chat_id]['state'] = AWAITING_LOCK_DURATION
         await bot.delete_message(chat_id, message.message_id)
-    await bot.send_message(chat_id, f"How many minutes to lock chat for?")
+        await bot.send_message(chat_id, f"How many minutes to lock chat for?")
+    except ValueError as e:
+        await bot.send_message(chat_id, f"{e}")
+    except Exception as e:
+        print(f"An error occured: {e}")
 
 @bot.message_handler(func=lambda message: chat_states.get(message.chat.id, {}).get('state') == AWAITING_LOCK_DURATION)
 async def process_duration(message):
     user_id = message.from_user.id
     chat_id = message.chat.id
 
-    if not chat_states[chat_id]['current_user'] == user_id:
+    if chat_states[chat_id]['current_user'] and not chat_states[chat_id]['current_user'] == user_id:
         return
 
     try:
         project = db_get_project(chat_id)
+        chat_states[chat_id]['target'].set_project_id(project['_id'])
+        chat_states[chat_id]['target'].set_group_chat_id(chat_id)
+        chat_states[chat_id]['target'].set_lock_duration(int(message.text))
 
-        target = {
-            "_id": '',
-            "project_id": project['_id'],
-            "group_chat_id": chat_id,
-            "x_target_link": chat_states[chat_id]['x_target_link'],
-            "lock_duration": int(message.text)
-        }
-
-        target = ShillgenXTarget(**target)
-        created_target = db_add_target(target)
+        created_target = db_add_target(chat_states[chat_id]['target'])
 
         await bot.send_message(chat_id, f"https://t.me/shillgenx_test_bot?start={created_target['group_chat_id']}_{created_target['_id']}")
+        await bot.send_message(chat_id, f"Chat is locked for {created_target['lock_duration']} minute(s).")
 
-        if is_permission_granted():
-            # # Restricting all members from sending messages
-            # permissions = types.ChatPermissions(can_send_messages=False)
-            # await bot.set_chat_permissions(chat_id, permissions)
-            await bot.send_message(chat_id, f"Chat is locked for {created_target['lock_duration']} minute(s).")
-
-            await asyncio.sleep(created_target['lock_duration'] * 60)
-
-            # Reverting permissions to allow sending messages
-            permissions = types.ChatPermissions(can_send_messages=True)
-            await bot.set_chat_permissions(chat_id, permissions)
-            await bot.send_message(chat_id, "Chat is unlocked now.")
+        await tg_lock_chat_for(chat_id, created_target['lock_duration'])
+        print("Shill session ended. Chat unlocked.")
+        
+        del chat_states[chat_id]
     except Exception as e:
         print("An error occurred:", e)
-    del chat_states[chat_id]
 
 @bot.message_handler(commands=['start'])
 async def handle_start(message):

@@ -1,5 +1,5 @@
 from enum import Enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict
 
 import re
@@ -41,8 +41,16 @@ class Project:
     x_handle: str = ""
     telegram: str = ""
     website: str = ""
-    tags: List[str] = None
-    topics: Dict[str, str] = None
+    tags: List[str] = field(default_factory=list)
+    topics: Dict[str, str] = field(default_factory=lambda: {
+        'product': '',
+        'technology': '',
+        'security': '',
+        'narrative': '',
+        'roadmap': '',
+        'use_case': '',
+        'community': ''
+    })
 
     def set_group_chat_id(self, value):
         self.group_chat_id = value
@@ -96,14 +104,74 @@ class Project:
         else:
             raise ValueError("All tags must be single words starting with either '$' or '#'")
 
+    def set_topics(self, value: Dict[str, str]):
+        self.topics = value
+
 
 @dataclass
 class ShillgenXTarget:
-    _id: str
-    project_id: str
-    group_chat_id: str
-    x_target_link: str
-    lock_duration: int
+    _id: str = ''
+    project_id: str = ''
+    group_chat_id: str = ''
+    x_target_link: str = ''
+    lock_duration: int = 1
+    goals: Dict[str, int] = field(default_factory=lambda: {
+        'comments': 1,
+        'reposts': 1,
+        'likes': 1,
+        'bookmarks': 1
+    })
+
+    def set_project_id(self, value: str):
+        self.project_id = value
+
+    def set_group_chat_id(self, value: str):
+        self.group_chat_id = value
+
+    def set_x_target_link(self, value: str):
+        # Assuming the x_target_link should be a valid URL
+        if isinstance(value, str) and re.match(r'https?://\S+', value):
+            self.x_target_link = value
+        else:
+            raise ValueError("Invalid X post link.")
+
+    def set_lock_duration(self, value: int):
+        if isinstance(value, int) and value > 0:
+            self.lock_duration = value
+        else:
+            raise ValueError("Invalid lock duration, must be a positive number.")
+
+    def set_goals(self, value: Dict[str, int]):
+        if isinstance(value, dict) and all(isinstance(k, str) and isinstance(v, int) and v > 0 for k, v in value.items()):
+            self.goals = value
+        else:
+            raise ValueError("Invalid goals.")
+
+    def set_goals(self, value: str):
+        if isinstance(value, str):
+            # Split the string by commas and convert each part to an integer
+            parts = value.split(',')
+            if len(parts) == 4:
+                try:
+                    # Convert string values to integers and validate if they are positive
+                    goals_values = [int(part) for part in parts]
+                    if all(val > 0 for val in goals_values):
+                        # Assign the values to the corresponding goals
+                        self.goals = {
+                            'comments': goals_values[0],
+                            'reposts': goals_values[1],
+                            'likes': goals_values[2],
+                            'bookmarks': goals_values[3]
+                        }
+                    else:
+                        raise ValueError("All goal values must be positive integers")
+                except ValueError:
+                    # Raised if conversion to int fails
+                    raise ValueError("Invalid input: All values must be integers")
+            else:
+                raise ValueError("Invalid input: Exactly four comma-separated values are required")
+        else:
+            raise ValueError("Goals must be provided as a comma-separated string")
 
 @dataclass
 class ShillPost:
