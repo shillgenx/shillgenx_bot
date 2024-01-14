@@ -1,7 +1,6 @@
 from telebot.async_telebot import AsyncTeleBot
 from telebot import types
 from dotenv import load_dotenv
-from pymongo import MongoClient
 from bson.objectid import ObjectId
 from dataclasses import asdict
 from typing import List, Dict
@@ -9,6 +8,7 @@ from openai import OpenAI
 import os
 import json
 import asyncio
+from motor.motor_asyncio import AsyncIOMotorClient
 
 from db.schemas import Project, ShillgenXTarget, Schemas
 
@@ -23,7 +23,7 @@ MONGO_HOST = os.getenv('MONGO_HOST')
 MONGO_PORT = os.getenv('MONGO_PORT')
 MONGO_DB = os.getenv('MONGO_DB')
 conn_str = f"mongodb://{MONGO_USERNAME}:{MONGO_PASSWORD}@{MONGO_HOST}:{MONGO_PORT}/{MONGO_DB}"
-client = MongoClient(conn_str)
+client = AsyncIOMotorClient(conn_str)
 db = client[MONGO_DB]
 
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
@@ -43,71 +43,71 @@ GENERATING_POST = range(10, 10)
 #                   SHILLGENX DB OPERATIONS                     #
 #                                                               #
 #################################################################
-def db_add_project(project: Project):
+async def db_add_project(project: Project):
     try:
         project_dict = asdict(project)
         del project_dict['_id']
         
-        if db_get_project(project_dict["group_chat_id"]):
+        if await db_get_project(project_dict["group_chat_id"]):
             raise Exception("A project for this group chat already exists.")
 
         collection = db["project"]
-        result = collection.insert_one(project_dict)
+        result = await collection.insert_one(project_dict)
         new_project_id = result.inserted_id
-        new_project = collection.find_one({'_id': new_project_id})
+        new_project = await collection.find_one({'_id': new_project_id})
     except Exception as e:
         print(f"An error occured: {e}")
 
     return new_project
 
-def db_get_project(telegram_chat_id: str) -> Dict:
+async def db_get_project(telegram_chat_id: str) -> Dict:
     try:
         collection = db["project"]
-        project = collection.find_one({"group_chat_id": telegram_chat_id})
+        project = await collection.find_one({"group_chat_id": telegram_chat_id})
     except Exception as e:
         print(f"An error occured: {e}")
     return project
 
-def db_delete_project(telegram_chat_id: str) -> bool:
+async def db_delete_project(telegram_chat_id: str) -> bool:
     try:
         collection = db["project"]
-        result = collection.delete_one({"group_chat_id": telegram_chat_id})
+        result = await collection.delete_one({"group_chat_id": telegram_chat_id})
         if result.deleted_count > 0:
             return True
     except Exception as e:
         print(f"An error occured: {e}")
     return False
 
-def db_edit_project(group_chat_id: str, field: str, new_value: str):
+async def db_edit_project(group_chat_id: str, field: str, new_value: str):
     try:
         query = {"group_chat_id": group_chat_id}
         updates = {"$set": {field: new_value}}
 
         collection = db["project"]
-        result = collection.update_one(query, updates)
+        result = await collection.update_one(query, updates)
         return result
     except Exception as e:
         print(f"An error occured: {e}")
 
-def db_add_target(target: ShillgenXTarget):
+async def db_add_target(target: ShillgenXTarget):
     try:
         target_dict = asdict(target)
         del target_dict['_id']
 
         collection = db["target"]
-        result = collection.insert_one(target_dict)
+        result = await collection.insert_one(target_dict)
         new_target_id = result.inserted_id
-        new_target = collection.find_one({'_id': new_target_id})
+        new_target = await collection.find_one({'_id': new_target_id})
     except Exception as e:
         print(f"An error occured: {e}")
 
     return new_target
 
-def db_get_target(object_id: str) -> Dict:
+async def db_get_target(object_id: str) -> Dict:
     try:
         collection = db["target"]
         object_id = ObjectId(object_id)
-        target = collection.find_one({"_id": object_id})
+        target = await collection.find_one({"_id": object_id})
     except Exception as e:
         print(f"An error occured: {e}")
     return target
@@ -232,7 +232,7 @@ async def handle_shillgenx_setup(message):
         # await bot.reply_to(message, "You must be an admin for this operation.")
         return
 
-    if db_get_project(chat_id):
+    if await db_get_project(chat_id):
         await bot.send_message(chat_id, "A ShillgenX account is already setup in this chat. Use /sgx_delete to start over.")
         return
 
@@ -252,7 +252,7 @@ async def handle_shillgenx_delete(message):
         # await bot.reply_to(message, "You must be an admin for this operation.")
         return
 
-    if db_delete_project(chat_id):
+    if await db_delete_project(chat_id):
         await bot.send_message(chat_id, "ShillgenX account successfully deleted.")
         return
     await bot.send_message(chat_id, "Something went wrong.")
@@ -352,7 +352,8 @@ async def process_tags(message):
         initial_topics = await ai_prefill_topics(chat_states[chat_id]['project'], chat_states[chat_id]['project'].topics)
         chat_states[chat_id]['project'].set_topics(initial_topics)
 
-        created_project = db_add_project(chat_states[chat_id]['project'])
+        created_project = await db_add_project(chat_states[chat_id]['project'])
+        print(created_project)
 
         del chat_states[chat_id]
         await bot.send_message(chat_id, "Thank you! Your account has been created. Now use /shillx to start raiding!")
@@ -415,12 +416,12 @@ async def process_duration(message):
         return
 
     try:
-        project = db_get_project(chat_id)
+        project = await db_get_project(chat_id)
         chat_states[chat_id]['target'].set_project_id(project['_id'])
         chat_states[chat_id]['target'].set_group_chat_id(chat_id)
         chat_states[chat_id]['target'].set_lock_duration(int(message.text))
 
-        created_target = db_add_target(chat_states[chat_id]['target'])
+        created_target = await db_add_target(chat_states[chat_id]['target'])
 
         await bot.send_message(chat_id, f"https://t.me/shillgenx_test_bot?start={created_target['group_chat_id']}_{created_target['_id']}")
         await bot.send_message(chat_id, f"Chat is locked for {created_target['lock_duration']} minute(s).")
@@ -439,8 +440,8 @@ async def handle_start(message):
         params = args[1].split('_')
         group_chat_id = params[0]
         shill_target_id = params[1]
-        target_object = db_get_target(shill_target_id)
-        project_object = db_get_project(target_object["group_chat_id"])
+        target_object = await db_get_target(shill_target_id)
+        project_object = await db_get_project(target_object["group_chat_id"])
         await bot.send_message(message.chat.id, f"Target Details: {target_object}\nProject Details: {project_object}")
     else:
         await bot.send_message(message.chat.id, "Welcome to the bot!")
